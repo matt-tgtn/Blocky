@@ -49,6 +49,46 @@ def load_sound(name):
         raise SystemExit, message
     return sound
 
+def clear_screen(background,screen,backgroundColour):
+    background.fill(backgroundColour)
+    screen.blit(background,[0,0])
+
+class TextSprite(pygame.sprite.Sprite):
+    def __init__(self, position,colour=[255,255,0], label='',variable='',size=20):
+        pygame.sprite.Sprite.__init__(self)
+        self.label = label
+        self.variable = variable
+        self.position = position
+        self.colour = colour
+
+        
+        self.font = pygame.font.Font(None,size)
+        self.image = self.font.render(self.label+str(self.variable),1,colour)
+        self.rect = self.image.get_rect()
+        self.rect.topleft = position
+        
+    def update(self,variable):
+        self.image = self.font.render(self.label+str(variable),True,self.colour)
+        self.rect = self.image.get_rect()
+        self.rect.topleft = self.position
+    
+    def clear(self,screen,backgroundColour):
+        self.image.fill(backgroundColour)
+        screen.blit(self.image,self.rect)
+    
+    def draw(self, screen):
+        screen.blit(self.image,self.rect)
+
+class SoundHandler:
+    def __init__(self,sounds):
+        self.sounds = {}
+        for i in sounds:
+            self.sounds[i] = load_sound(i+'.wav')
+    def playSound(self,sound):
+        if sound in self.sounds:
+            self.sounds[sound].set_volume(10)
+            self.sounds[sound].play()
+    
 class KeyTracker:
     """Keeps track of which keys are down and which aren't
     
@@ -78,14 +118,19 @@ class KeyTracker:
         self.keys[key] = state
    
 class DepthMeter:
-    def __init__(self,background,screen,size,maxHeight=1000):
+    def __init__(self,screen,size,maxHeight=1000):
         self.screen = screen
         self.image = pygame.Surface([40,400])
         self.maxHeight = maxHeight
 
         
-    def update(self,background,height=0,):
-        self.image.fill(background)
+    def update(self,backgroundColour,height=0):
+        #Erases the old image
+        self.image.fill(backgroundColour)
+        self.screen.blit(self.image,[660,280])
+        
+        #Builds and blits the new one
+        self.image.fill([0,0,0])
         meter = pygame.Surface([10,400])
         marker = pygame.Surface([20,5])
         meter.fill([220,220,220])
@@ -95,30 +140,59 @@ class DepthMeter:
         relHeight = 398-((height/self.maxHeight)*398)
         self.image.blit(marker,[10,relHeight])
         
+        self.image.set_colorkey([0,0,0])
+        
         self.screen.blit(self.image,[660,280])
 
 class Player(pygame.sprite.Sprite):
     """A sprite for our player"""
-    def __init__(self,colour,size,screen):
+    def __init__(self,colour,actualPlayerPos,screen):
         pygame.sprite.Sprite.__init__(self)
         
-        self.size = size
+        self.actualPlayerPos = actualPlayerPos
         self.screen = screen
-        self.maxVelocity = 8
         
-        self.image = pygame.Surface([50,50])
-        self.image.fill(colour)
+        #set the key values of the player
+        self.colour = [255,255,0]
+        self.size = 50
+        self.intendedSize = [50,50] #This will store the .5 pixels 
+        self.scale = (1,False)
+        self.lastShrink = 50
+
                 
-        self.rect = self.image.get_rect()
-        self.rect.center = [size[0]/2,size[1]/2]
+        self.rect = pygame.Rect([0,0],[self.size,self.size])
+        self.rect.center = self.actualPlayerPos
+        
+        self._refreshImage()
                 
         ############Movement variables##########
         self.velocity = [0,0]
         self.acceleration = 0.5
         self.resistance = 0.5
         self.position = [-200,-200]
+        self.maxVelocity = 8
                 
     def update(self,directions):
+        
+        #Testing to see if a shrink is required
+        if self.lastShrink==(self.size/2):
+            self.scale = (self.scale[0]/2.0,True)
+            self.lastShrink = self.size
+        else:
+            self.scale = (self.scale[0],False)
+        
+        #If the scale has changed then shrink!
+        if self.scale[1]:
+            #Rescales and re-centers sprites
+            self.rect.width = self.size*self.scale[0]
+            self.rect.height = self.size*self.scale[0]
+            self.rect.center = self.actualPlayerPos
+            #Refreshes the image to show the sprite properly
+            self._refreshImage
+
+        
+        
+        
         #If a button is pressed, do not apply resistances
         if not directions == [0,0]:
             self.velocity[1] += (self.acceleration*directions[1])
@@ -140,8 +214,20 @@ class Player(pygame.sprite.Sprite):
         #Updates the position
         self.position[0] += self.velocity[0]
         self.position[1] += self.velocity[1]
-        self.screen.blit(self.image,self.rect)
         
+        self._refreshImage()
+        
+        self.screen.blit(self.image,self.rect)
+     
+    def spriteCollision(self,sprites,soundHandler):
+        if len(sprites)>0:
+            self.size = self.size+len(sprites)
+            self.rect.size = [self.size*self.scale[0],self.size*self.scale[0]]
+            
+            self.rect.center = self.actualPlayerPos
+            soundHandler.playSound('chomp')
+        
+       
     def _applyHorizontalRes(self):
         """Applies the resistance variable on the horizontal plane"""
         if math.fabs(self.velocity[0]-self.resistance)<self.resistance:
@@ -150,8 +236,7 @@ class Player(pygame.sprite.Sprite):
                 self.velocity[0] -= self.resistance
         elif self.velocity[0]<0:
                 self.velocity[0] += self.resistance
-        
-    
+                
     def _applyVerticalRes(self):
         """Applies the resistance variable on the vertical plane"""
         if math.fabs(self.velocity[1]-self.resistance)<self.resistance:
@@ -161,19 +246,24 @@ class Player(pygame.sprite.Sprite):
             self.velocity[1] -= self.resistance
         elif self.velocity[1]<0:
             self.velocity[1] += self.resistance
-        
-        
+    
+    def _refreshImage(self):
+        self.image = pygame.Surface(self.rect.size)
+        self.image.fill(self.colour)
+ 
 class Enemy(pygame.sprite.Sprite):
-    def __init__(self,actualPlayerPos,playerPos,spawnRadius):
+    def __init__(self,actualPlayerPos,playerPos,spawnRadius,scale):
         pygame.sprite.Sprite.__init__(self)
         
         self.actualPlayerPos = actualPlayerPos
         self.spawnRadius = spawnRadius
+        self.size = 20
+        self.colour = [0,255,0]
         
         #Set the basic sprite attributes
-        self.image = pygame.Surface([20,20])
-        self.image.fill([0,255,0])
-        self.rect = self.image.get_rect()
+
+        self.rect = pygame.Rect([0,0],[self.size*scale,self.size*scale])
+        self._refreshImage()
         
         #Randomly finds the initial position
         self.position = self._findInitialPos(playerPos)
@@ -182,14 +272,23 @@ class Enemy(pygame.sprite.Sprite):
         #Randomly sets the initial velocity
         self.velocity = [random.uniform(-1,1),random.uniform(-1,1)]
   
-    def update(self,playerPos):
+    def update(self,playerPos,scale):
+        #If the scale has changed then shrink!
+        if scale[1]:
+            self.rect.width = self.size*scale[0]
+            self.rect.height = self.size*scale[0]
+            self._refreshImage()
+            
+        
         self.position[0]+=self.velocity[0]
         self.position[1]+=self.velocity[1]
         
         self.rect.center = self.getScreenPos(playerPos)
         
-        if self.distanceToObject(self.position,playerPos)>self.spawnRadius:
+        if self.distanceToObject(self.position,playerPos)>self.spawnRadius or self.size*scale[0]<1:
             self.kill()
+        
+        
    
     def getScreenPos(self,playerPos):
         screenPos = [0,0]
@@ -211,6 +310,7 @@ class Enemy(pygame.sprite.Sprite):
         return distance
     
     def _findInitialPos(self,playerPos):
+        #Chooses a random position within the spawn radius and tests its validity
         while True:
             initialPosX = random.uniform(playerPos[0]-self.spawnRadius,playerPos[0]+self.spawnRadius)
             initialPosY = random.uniform(playerPos[1]-self.spawnRadius,playerPos[1]+self.spawnRadius)
@@ -224,6 +324,10 @@ class Enemy(pygame.sprite.Sprite):
             if self.distanceToObject(selfPos,playerPos)<self.spawnRadius:
                 return True
         return False
+    
+    def _refreshImage(self):
+        self.image = pygame.Surface(self.rect.size)
+        self.image.fill(self.colour)
 
 def main():
     clock = pygame.time.Clock()
@@ -240,27 +344,28 @@ def main():
     #create and set the screen
     screen = pygame.display.set_mode(size)
     background = pygame.Surface(size)
-    background.fill(backgroundColour)
-    screen.blit(background,[0,0])
-    
+    clear_screen(background,screen,backgroundColour)
     
     
     
     #create the non-sprite objects
-    depthMeter = DepthMeter(background,screen,size,maxHeight)
-    player = Player([255,255,0],size,screen)
+    soundHandler = SoundHandler(['chomp'])
+    depthMeter = DepthMeter(screen,size,maxHeight)
+    player = Player([255,255,0],actualPlayerPos,screen)
     keyTracker = KeyTracker()
     
-    #create the enemies
+    #create the sprite objects and groups
+    sizeText = TextSprite([0,0],[255,255,0],'Size: ',player.size)
+    
+    
+    
     enemyGroup = pygame.sprite.RenderUpdates()
     for i in xrange(numberOfEnemies):
-        enemyGroup.add(Enemy(actualPlayerPos,player.position,spawnRadius))
+        enemyGroup.add(Enemy(actualPlayerPos,player.position,spawnRadius,player.scale[0]))
 
-    
     
     while True:
         clock.tick(60)
-            
         #########HANDLING KEY EVENTS##############    
         for event in pygame.event.get():
             if event.type == KEYDOWN:
@@ -298,20 +403,29 @@ def main():
         
         #Update sprite objects
         enemyGroup.clear(screen,background)
-        enemyGroup.update(player.position)
-        enemylist = enemyGroup.draw(screen)
-        #pygame.display.update(enemylist)
+        enemyGroup.update(player.position,player.scale)
+        enemyGroup.draw(screen)
+        
+        sizeText.clear(screen,backgroundColour)
+        sizeText.update(player.size)
+        sizeText.draw(screen)
+        
         
         #Update non-sprite objects
         depthMeter.update(backgroundColour,player.position[1])
         player.update(directions)    
+        if player.scale[1]: clear_screen(background,screen,backgroundColour)
         
         
+        #Test for collisions between sprites
+        collisions = pygame.sprite.spritecollide(player,enemyGroup,True)
+        player.spriteCollision(collisions,soundHandler)
+            
         
         #Repopulate the dead sprites
         if len(enemyGroup)<numberOfEnemies:
             for i in xrange(numberOfEnemies-len(enemyGroup)):
-                enemyGroup.add(Enemy(actualPlayerPos,player.position,spawnRadius))
+                enemyGroup.add(Enemy(actualPlayerPos,player.position,spawnRadius,player.scale[0]))
         
         pygame.display.flip()
 
@@ -338,6 +452,8 @@ def titleScreen():
     screen.blit(ren, (300, 200))
     ren = font2.render("Press any key to continue.", 1, hum)
     screen.blit(ren, (140, 400))
+    ren = font2.render("ESC to quit.", 1, hum)
+    screen.blit(ren, (140, 600))
 
     while running:
         clock.tick(55)
@@ -350,8 +466,8 @@ def titleScreen():
                     raise SystemExit()
                 else:
                     main()
-                
-                
+    
+    
 if __name__=='__main__':
     titleScreen()
 
